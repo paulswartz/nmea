@@ -12,21 +12,54 @@ defmodule NMEA do
 
   ## Examples
 
-      iex> NMEA.parse("$GPRMC,,V,,,,,,,,,,N*53")
-      {:ok, {"GP", "RMC", ["", "V", "", "", "", "", "", "", "", "", "", "N"]}}
-
+      iex> NMEA.parse("$GPRMC,092751.000,A,5321.6802,N,00630.3371,W,0.06,31.66,280511,,,A*45")
+      {:ok, %NMEA.Sentence.RMC{
+        talker: "GP",
+        valid?: true,
+        date_time: ~U[2011-05-28T09:27:51.000Z],
+        latitude: 53.36133667,
+        longitude: -6.50561833,
+        speed_knots: 0.06,
+        course: 31.66,
+        mode: :autonomous}}
   """
-  def parse("$" <> <<talker::binary-size(2)>> <> <<type::binary-size(3)>> <> rest) do
+  def parse(<<"$P", vendor::binary-size(3), type::binary-size(1), rest::binary>>) do
     [data, checksum] = String.split(rest, "*")
 
-    case valid?(talker <> type <> data, checksum) do
-      true ->
-        [_ | values] = String.split(data, ",")
+    if valid?("P" <> vendor <> type <> data, checksum) do
+      [_ | values] = String.split(data, ",")
 
-        {:ok, {talker, type, values}}
+      {:ok,
+       %NMEA.Sentence.Proprietary{
+         vendor: vendor,
+         type: type,
+         records: values
+       }}
+    else
+      {:error, :checksum}
+    end
+  end
 
-      _ ->
+  def parse("$" <> <<talker::binary-size(2)>> <> <<type::binary-size(3)>> <> rest) do
+    [data, checksum] = String.split(rest, "*")
+    [_ | values] = String.split(data, ",")
+    module = Module.concat(NMEA.Sentence, type)
+    _ = Code.ensure_loaded(module)
+
+    cond do
+      not valid?(talker <> type <> data, checksum) ->
         {:error, :checksum}
+
+      not function_exported?(module, :parse, 2) ->
+        {:ok,
+         %NMEA.Sentence.Unknown{
+           talker: talker,
+           type: type,
+           records: values
+         }}
+
+      true ->
+        {:ok, module.parse(talker, values)}
     end
   end
 
